@@ -158,18 +158,24 @@ class DSQLSeeder:
         """Seed cities data."""
         logger.info("Seeding cities...")
         
+        # Build batch insert
+        values_list = []
+        params_list = []
+        
         for city in self.DEMO_CITIES:
-            query = """
-                INSERT INTO cities (code, name, country, continent, timezone, 
-                                  latitude, longitude, description, tags)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            params = (
+            values_list.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            params_list.extend([
                 city['code'], city['name'], city['country'], city['continent'],
                 city['timezone'], city['latitude'], city['longitude'],
                 city['description'], json.dumps(city['tags'])
-            )
-            self.db.adapter.execute_query(query, params)
+            ])
+        
+        query = f"""
+            INSERT INTO cities (code, name, country, continent, timezone, 
+                              latitude, longitude, description, tags)
+            VALUES {', '.join(values_list)}
+        """
+        self.db.adapter.execute_query(query, tuple(params_list))
         
         logger.info(f"Seeded {len(self.DEMO_CITIES)} cities")
     
@@ -177,13 +183,19 @@ class DSQLSeeder:
         """Seed airlines data."""
         logger.info("Seeding airlines...")
         
+        # Build batch insert
+        values_list = []
+        params_list = []
+        
         for airline in self.AIRLINES:
-            query = """
-                INSERT INTO airlines (code, name, hub_cities)
-                VALUES (%s, %s, %s)
-            """
-            params = (airline['code'], airline['name'], json.dumps(airline['hub_cities']))
-            self.db.adapter.execute_query(query, params)
+            values_list.append("(%s, %s, %s)")
+            params_list.extend([airline['code'], airline['name'], json.dumps(airline['hub_cities'])])
+        
+        query = f"""
+            INSERT INTO airlines (code, name, hub_cities)
+            VALUES {', '.join(values_list)}
+        """
+        self.db.adapter.execute_query(query, tuple(params_list))
         
         logger.info(f"Seeded {len(self.AIRLINES)} airlines")
     
@@ -192,6 +204,10 @@ class DSQLSeeder:
         logger.info("Seeding flight routes...")
         
         city_codes = [c['code'] for c in self.DEMO_CITIES]
+        
+        # Build batch insert
+        values_list = []
+        params_list = []
         route_count = 0
         
         for i, origin in enumerate(city_codes):
@@ -219,27 +235,29 @@ class DSQLSeeder:
                     # Select airlines that could fly this route
                     route_airlines = self._select_airlines_for_route(origin, destination)
                     
-                    query = """
-                        INSERT INTO flight_routes (route_id, origin_code, destination_code, airlines,
-                                                 flight_duration_minutes, distance_km, typical_aircraft)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """
-                    params = (
+                    values_list.append("(%s, %s, %s, %s, %s, %s, %s)")
+                    params_list.extend([
                         self.route_id_counter, origin, destination, json.dumps(route_airlines),
                         flight_duration, int(distance), json.dumps(aircraft_types)
-                    )
-                    self.db.adapter.execute_query(query, params)
+                    ])
                     self.route_id_counter += 1
                     route_count += 1
+        
+        query = f"""
+            INSERT INTO flight_routes (route_id, origin_code, destination_code, airlines,
+                                     flight_duration_minutes, distance_km, typical_aircraft)
+            VALUES {', '.join(values_list)}
+        """
+        self.db.adapter.execute_query(query, tuple(params_list))
         
         logger.info(f"Seeded {route_count} flight routes")
     
     def seed_flights(self):
-        """Seed 12 months of flight data."""
-        logger.info("Generating flights for 365 days...")
+        """Seed 60 days of flight data."""
+        logger.info("Generating flights for 60 days...")
         
         start_date = date.today()
-        end_date = start_date + timedelta(days=365)
+        end_date = start_date + timedelta(days=60)
         
         # Get all routes
         routes = self.db.adapter.execute_query("SELECT * FROM flight_routes")
@@ -247,9 +265,11 @@ class DSQLSeeder:
         total_flights = 0
         current_date = start_date
         
+        # Batch configuration
+        BATCH_SIZE = 900
+        flights_batch = []
+        
         while current_date <= end_date:
-            flights_batch = []
-            
             for route in routes:
                 # Parse JSON fields
                 airlines = route['airlines']
@@ -280,15 +300,7 @@ class DSQLSeeder:
                     base_economy_price = self._calculate_base_price(route['distance_km'])
                     economy_price = self._apply_pricing_factors(base_economy_price, current_date, departure_time)
                     
-                    query = """
-                        INSERT INTO flights (flight_id, flight_number, airline_code, origin_code, destination_code,
-                                           departure_date, departure_time, arrival_date, arrival_time,
-                                           duration_minutes, aircraft_type, economy_seats_available,
-                                           business_seats_available, first_seats_available,
-                                           economy_price, business_price, first_price, status)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """
-                    params = (
+                    flight_data = (
                         self.flight_id_counter, flight_number, airline, route['origin_code'], route['destination_code'],
                         current_date, departure_time, arrival_datetime.date(), arrival_datetime.time(),
                         route['flight_duration_minutes'], aircraft,
@@ -300,20 +312,50 @@ class DSQLSeeder:
                         round(economy_price * 4, 2),    # first class price
                         'scheduled'
                     )
-                    flights_batch.append((query, params))
+                    flights_batch.append(flight_data)
                     self.flight_id_counter += 1
                     total_flights += 1
+                    
+                    # Insert batch when it reaches the size limit
+                    if len(flights_batch) >= BATCH_SIZE:
+                        self._insert_flights_batch(flights_batch)
+                        flights_batch = []
+                        logger.info(f"  Inserted {total_flights} flights so far...")
             
-            # Insert batch of flights for this day
-            for query, params in flights_batch:
-                self.db.adapter.execute_query(query, params)
-            
-            if current_date.day == 1:
+            if current_date.day == 1 or current_date.day == 15:
                 logger.info(f"  Generated flights up to {current_date.strftime('%Y-%m-%d')}")
             
             current_date += timedelta(days=1)
         
+        # Insert remaining flights
+        if flights_batch:
+            self._insert_flights_batch(flights_batch)
+        
         logger.info(f"Seeded {total_flights} flights")
+    
+    def _insert_flights_batch(self, flights_batch):
+        """Insert a batch of flights using multi-value insert."""
+        if not flights_batch:
+            return
+        
+        # Build multi-value INSERT statement
+        values_list = []
+        params_list = []
+        
+        for flight in flights_batch:
+            values_list.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            params_list.extend(flight)
+        
+        query = f"""
+            INSERT INTO flights (flight_id, flight_number, airline_code, origin_code, destination_code,
+                               departure_date, departure_time, arrival_date, arrival_time,
+                               duration_minutes, aircraft_type, economy_seats_available,
+                               business_seats_available, first_seats_available,
+                               economy_price, business_price, first_price, status)
+            VALUES {', '.join(values_list)}
+        """
+        
+        self.db.adapter.execute_query(query, tuple(params_list))
     
     def seed_hotels(self):
         """Seed hotels data."""
@@ -364,6 +406,9 @@ class DSQLSeeder:
             'GIG': ['Copacabana', 'Ipanema', 'Centro', 'Santa Teresa', 'Barra da Tijuca']
         }
         
+        # Build batch insert
+        values_list = []
+        params_list = []
         hotel_count = 0
         
         for city in self.DEMO_CITIES:
@@ -381,14 +426,8 @@ class DSQLSeeder:
                     
                     neighborhood = random.choice(city_neighborhoods)
                     
-                    query = """
-                        INSERT INTO hotels (hotel_id, name, city_code, address, latitude, longitude,
-                                          star_rating, hotel_type, amenities, room_types,
-                                          description, neighborhood_description, tags,
-                                          base_price_min, base_price_max)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """
-                    params = (
+                    values_list.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+                    params_list.extend([
                         self.hotel_id_counter, hotel_name, city_code,
                         f'{random.randint(1, 999)} {neighborhood} Street, {city_name}',
                         city['latitude'] + random.uniform(-0.1, 0.1),
@@ -401,22 +440,32 @@ class DSQLSeeder:
                         json.dumps(template['tags'] + city['tags'][:2]),
                         template['base_price_range'][0],
                         template['base_price_range'][1]
-                    )
-                    self.db.adapter.execute_query(query, params)
+                    ])
                     self.hotel_id_counter += 1
                     hotel_count += 1
+        
+        query = f"""
+            INSERT INTO hotels (hotel_id, name, city_code, address, latitude, longitude,
+                              star_rating, hotel_type, amenities, room_types,
+                              description, neighborhood_description, tags,
+                              base_price_min, base_price_max)
+            VALUES {', '.join(values_list)}
+        """
+        self.db.adapter.execute_query(query, tuple(params_list))
         
         logger.info(f"Seeded {hotel_count} hotels")
     
     def seed_hotel_availability(self):
-        """Seed 12 months of hotel availability."""
-        logger.info("Generating hotel availability for 365 days...")
+        """Seed 60 days of hotel availability."""
+        logger.info("Generating hotel availability for 60 days...")
         
         hotels = self.db.adapter.execute_query("SELECT * FROM hotels")
         start_date = date.today()
-        end_date = start_date + timedelta(days=365)
+        end_date = start_date + timedelta(days=60)
         
         total_records = 0
+        BATCH_SIZE = 900
+        availability_batch = []
         
         for hotel in hotels:
             current_date = start_date
@@ -437,16 +486,10 @@ class DSQLSeeder:
                 # Calculate pricing based on occupancy and other factors
                 price_multiplier = 1 + (base_occupancy / 100) * 0.5  # Higher occupancy = higher price
                 
-                base_price = hotel['base_price_min']
+                # Convert Decimal to float for calculations
+                base_price = float(hotel['base_price_min'])
                 
-                query = """
-                    INSERT INTO hotel_availability (availability_id, hotel_id, date, standard_rooms_available,
-                                                  standard_room_price, deluxe_rooms_available,
-                                                  deluxe_room_price, suite_rooms_available,
-                                                  suite_room_price, occupancy_rate)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """
-                params = (
+                availability_data = (
                     self.availability_id_counter, hotel['hotel_id'], current_date,
                     max(1, standard_available),
                     round(base_price * price_multiplier, 2),
@@ -456,13 +499,46 @@ class DSQLSeeder:
                     round(base_price * 2.5 * price_multiplier, 2),
                     base_occupancy
                 )
-                self.db.adapter.execute_query(query, params)
+                availability_batch.append(availability_data)
                 self.availability_id_counter += 1
                 total_records += 1
                 
+                # Insert batch when it reaches the size limit
+                if len(availability_batch) >= BATCH_SIZE:
+                    self._insert_hotel_availability_batch(availability_batch)
+                    availability_batch = []
+                    logger.info(f"  Inserted {total_records} availability records so far...")
+                
                 current_date += timedelta(days=1)
         
+        # Insert remaining records
+        if availability_batch:
+            self._insert_hotel_availability_batch(availability_batch)
+        
         logger.info(f"Seeded {total_records} hotel availability records")
+    
+    def _insert_hotel_availability_batch(self, availability_batch):
+        """Insert a batch of hotel availability records using multi-value insert."""
+        if not availability_batch:
+            return
+        
+        # Build multi-value INSERT statement
+        values_list = []
+        params_list = []
+        
+        for availability in availability_batch:
+            values_list.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            params_list.extend(availability)
+        
+        query = f"""
+            INSERT INTO hotel_availability (availability_id, hotel_id, date, standard_rooms_available,
+                                          standard_room_price, deluxe_rooms_available,
+                                          deluxe_room_price, suite_rooms_available,
+                                          suite_room_price, occupancy_rate)
+            VALUES {', '.join(values_list)}
+        """
+        
+        self.db.adapter.execute_query(query, tuple(params_list))
     
     def seed_activities(self):
         """Seed activities data."""
@@ -759,11 +835,11 @@ class DSQLSeeder:
             self.create_summary()
             
             logger.info("\n✅  DSQL seeding completed successfully!")
-            logger.info("   Data volume matches SQLite database:")
+            logger.info("   Data volume generated:")
             logger.info("   - 7 cities with full details")
             logger.info("   - 12 airlines")
-            logger.info("   - 60,000+ scheduled flights")
-            logger.info("   - 70+ hotels with availability")
+            logger.info("   - ~10,000 scheduled flights (60 days)")
+            logger.info("   - 70+ hotels with availability (60 days)")
             logger.info("   - Activities in each city")
             
         except Exception as e:
