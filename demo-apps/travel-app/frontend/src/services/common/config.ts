@@ -1,20 +1,3 @@
-/**
- * Service configuration
- * 
- * This file contains configuration values for the API client and WebSocket services.
- * Values are primarily loaded from environment variables with reasonable defaults.
- * 
- * For deployment:
- * 1. Get the API endpoints from CloudFormation outputs:
- *    - ApiEndpoint: use for apiEndpoint value
- *    - WebSocketApiEndpoint: use for webSocketEndpoint value
- * 2. Set these values in .env.local for development or .env.production for production:
- *    REACT_APP_API_ENDPOINT=https://xxxx.execute-api.region.amazonaws.com/dev
- *    REACT_APP_WEBSOCKET_ENDPOINT=wss://xxxx.execute-api.region.amazonaws.com/dev
- * 
- * See DEV-ENV-SETUP.md and PRODUCTION-SETUP.md for more details.
- */
-
 interface ServiceConfig {
   // API configuration
   apiEndpoint: string;

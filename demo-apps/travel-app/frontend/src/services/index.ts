@@ -4,7 +4,6 @@ import webSocketService from './websocket/WebSocketService';
 import notificationService from './common/NotificationService';
 import travelPlanService from './travel/TravelPlanService';
 import interactionService from './travel/InteractionService';
-import simulationService from './simulation/SimulationService';
 import { config } from './common/config';
 
 // Export service classes
@@ -13,7 +12,6 @@ export { default as WebSocketService } from './websocket/WebSocketService';
 export { default as NotificationService } from './common/NotificationService';
 export { default as TravelPlanService } from './travel/TravelPlanService';
 export { default as InteractionService } from './travel/InteractionService';
-export { default as SimulationService } from './simulation/SimulationService';
 export { config };
 
 // Export singleton instances
@@ -22,8 +20,7 @@ export {
   webSocketService,
   notificationService,
   travelPlanService,
-  interactionService,
-  simulationService
+  interactionService
 };
 
 // Export types and enums
